@@ -27,171 +27,95 @@ By [@USERNAME](https://github.com/USERNAME) in https://github.com/apollographql/
 
 ## ❗ BREAKING ❗
 
-### Exit the router after logging panic details ([PR #1602](https://github.com/apollographql/router/pull/1602))
+### Unified supergraph and execution response types
 
-If the router panics, it can leave the router in an unuseable state.
+`apollo_router::services::supergraph::Response` and 
+`apollo_router::services::execution::Response` were two structs with identical fields
+and almost-identical methods.
+The main difference was that builders were fallible for the former but not the latter.
 
-Terminating after logging the panic details is the best choice here.
-
-By [@garypen](https://github.com/garypen) in https://github.com/apollographql/router/pull/1602
-
-### Remove `activate()` from the plugin API ([PR #1569](https://github.com/apollographql/router/pull/1569))
-
-Recent changes to configuration reloading means that the only known consumer of this API, telemetry, is no longer using it.
-
-Let's remove it since it's simple to add back if later required.
-
-By [@garypen](https://github.com/garypen) in https://github.com/apollographql/router/pull/1569
-
-### Rename TestHarness methods ([PR #1579](https://github.com/apollographql/router/pull/1579))
-
-Some methods of `apollo_router::TestHarness` were renamed:
-
-* `extra_supergraph_plugin` → `supergraph_hook`
-* `extra_execution_plugin` → `execution_hook`
-* `extra_subgraph_plugin` → `subgraph_hook`
-
-By [@SimonSapin](https://github.com/SimonSapin) in https://github.com/apollographql/router/pull/1579
-
-### `Request` and `Response` types from `apollo_router::http_ext` are private ([Issue #1589](https://github.com/apollographql/router/issues/1589))
-
-These types were wrappers around the `Request` and `Response` types from the `http` crate.
-Now the latter are used directly instead.
-
-By [@SimonSapin](https://github.com/SimonSapin) in https://github.com/apollographql/router/pull/1589
-
-### Changes to `IntoHeaderName` and `IntoHeaderValue` ([PR #1607](https://github.com/apollographql/router/pull/1607))
-
-Note: these types are typically not use directly, so we expect most user code to require no change.
-
-* Move from `apollo_router::http_ext` to `apollo_router::services`
-* Rename to `TryIntoHeaderName` and `TryIntoHeaderValue`
-* Make contents opaque
-* Replace generic `From<T: Display>` conversion with multiple specific conversions
-  that are implemented by `http::headers::Header{Name,Value}`.
-
-By [@SimonSapin](https://github.com/SimonSapin) in https://github.com/apollographql/router/pull/1607
-
-### QueryPlan::usage_reporting and QueryPlannerContent are private ([Issue #1556](https://github.com/apollographql/router/issues/1556))
-
-These items have been removed from the public API of `apollo_router::services::execution`.
-
-By [@SimonSapin](https://github.com/SimonSapin) in https://github.com/apollographql/router/pull/1568
-
-### Insert the full target triplet in the package name, and prefix with `v` ([Issue #1385](https://github.com/apollographql/router/issues/1385))
-
-The release tarballs now contain the full target triplet in their name along with a `v` prefix to be consistent with our other packaging techniques (e.g., Rover):
-
-* `router-0.16.0-x86_64-linux.tar.gz` -> `router-v0.16.0-x86_64-unknown-linux-gnu.tar.gz`
-* `router-0.16.0-x86_64-macos.tar.gz` -> `router-v0.16.0-x86_64-apple-darwin.tar.gz`
-* `router-0.16.0-x86_64-windows.tar.gz` -> `router-v0.16.0-x86_64-pc-windows-msvc.tar.gz`
-
-By [@abernix](https://github.com/abernix) and [@Geal](https://github.com/Geal) in https://github.com/apollographql/router/pull/1433 (which re-lands work done in https://github.com/apollographql/router/pull/1393)
-
-### Many structs and enums are now `#[non_exhaustive]` ([Issue #1550](https://github.com/apollographql/router/issues/1550))
-
-This means we may add struct fields or enum variants in the future.
-To prepare for that eventuality:
-
-When using a struct pattern (such as for deconstructing a value into its fields),
-use `..` to allow further fields:
+They are now the same type (with one location a `type` alias of the other), with fallible builders.
+Callers may need to add either a operator `?` (in plugins) or an `.unwrap()` call (in tests).
 
 ```diff
--let PluginInit { config, supergraph_sdl } = init;
-+let PluginInit { config, supergraph_sdl, .. } = init;
+ let response = execution::Response::builder()
+     .error(error)
+     .status_code(StatusCode::BAD_REQUEST)
+     .context(req.context)
+-    .build();
++    .build()?;
 ```
 
-Or use field access instead:
+By [@SimonSapin](https://github.com/SimonSapin)
 
-```diff
--let PluginInit { config, supergraph_sdl } = init;
-+let config = init.config;
-+let supergraph_sdl = init.supergraph_sdl;
-```
+### Rename `originating_request` to `supergraph_request` on various plugin `Request` structures ([Issue #1713](https://github.com/apollographql/router/issues/1713))
 
-When constructing a struct, use a builder or constructor method instead of struct literal syntax:
+We feel that `supergraph_request` makes it more clear that this is the request received from the client.
 
-```diff
--let error = graphql::Error {
--    message: "something went wrong".to_string(),
--    ..Default::default()
--};
-+let error = graphql::Error::builder()
-+    .message("something went wrong")
-+    .build();
-```
+By [@garypen](https://github.com/garypen) in https://github.com/apollographql/router/pull/1715
 
-When matching on an enum, add a wildcard match arm:
+### Allow users to customize the prometheus endpoint URL ([Issue #1645](https://github.com/apollographql/router/issues/1645))
 
-```diff
- match error {
-     ApolloRouterError::StartupError => "StartupError",
-     ApolloRouterError::HttpServerLifecycleError => "HttpServerLifecycleError",
-     ApolloRouterError::NoConfiguration => "NoConfiguration",
-     ApolloRouterError::NoSchema => "NoSchema",
-     ApolloRouterError::ServiceCreationError(_) => "ServiceCreationError",
-     ApolloRouterError::ServerCreationError(_) => "ServerCreationError",
-+    _ => "other error",
-}
-```
+The prometheus endpoint now listens to 0.0.0.0:9090/metrics by default. It previously listened to http://0.0.0.0:4000/plugins/apollo.telemetry/prometheus
+The Router's Prometheus interface is now exposed at `127.0.0.1:9090/metrics`, rather than `http://0.0.0.0:4000/plugins/apollo.telemetry/prometheus`.  This should be both more secure and also more generally compatible with the default settings that Prometheus expects (which also uses port `9090` and just `/metrics` as its defaults).
 
-By [@SimonSapin](https://github.com/SimonSapin) in https://github.com/apollographql/router/pull/1614
+To expose to a non-localhost interface, it is necessary to explicitly opt-into binding to a socket address of `0.0.0.0:9090` (i.e., all interfaces on port 9090) or a specific available interface (e.g., `192.168.4.1`) on the host.
 
-### Some error enums or variants were removed ([Issue #81](https://github.com/apollographql/router/issues/81))
+Have a look at the Features section to learn how to customize the listen address and the path
 
-They were not used anymore in the public API (or at all).
-
-By [@SimonSapin](https://github.com/SimonSapin) in FIXME
+By [@o0Ignition0o](https://github.com/o0Ignition0o) in https://github.com/apollographql/router/pull/1654
 
 ## 🚀 Features
 
-### instrument the rhai plugin with a tracing span ([PR #1598](https://github.com/apollographql/router/pull/1598))
+### New plugin helper: `map_first_graphql_response`
 
-If you have an active rhai script in your router, you will now see a "rhai plugin" tracing span.
+In supergraph and execution services, the service response contains
+not just one GraphQL response but a stream of them,
+in order to support features such as `@defer`.
 
-By [@garypen](https://github.com/garypen) in https://github.com/apollographql/router/pull/1598
+This new method of `ServiceExt` and `ServiceBuilderExt` in `apollo_router::layers`
+wraps a service and calls a `callback` when the first GraphQL response
+in the stream returned by the inner service becomes available.
+The callback can then access the HTTP parts (headers, status code, etc)
+or the first GraphQL response before returning them.
+
+See the doc-comments in `apollo-router/src/layers/mod.rs` for more.
+
+By [@SimonSapin](https://github.com/SimonSapin)
+
+### Allow users to customize the prometheus endpoint URL ([Issue #1645](https://github.com/apollographql/router/issues/1645))
+
+You can now customize the prometheus endpoint URL in your yml configuration:
+
+```yml
+telemetry:
+  metrics:
+    prometheus:
+      listen: 127.0.0.1:9090 # default
+      path: /metrics # default
+      enabled: true
+```
+
+By [@o0Ignition0o](https://github.com/@o0Ignition0o) in https://github.com/apollographql/router/pull/1654
 
 ## 🐛 Fixes
 
-### Only send one report for a response with deferred responses ([PR #1576](https://github.com/apollographql/router/issues/1576))
+### Fix metrics duration for router request ([#1705](https://github.com/apollographql/router/issues/1705))
 
-The router was sending one report per response (even deferred ones), while Studio was expecting one report for the entire
-response. The router now sends one report, that measures the latency of the entire operation.
+With the introduction of `BoxStream` for defer we introduced a bug when computing http request duration metrics. Sometimes we didn't wait for the first response in the `BoxStream`.
 
-By [@Geal](https://github.com/Geal) in https://github.com/apollographql/router/pull/1576
+By [@bnjjj](https://github.com/bnjjj) in https://github.com/apollographql/router/pull/1705
 
-### Include formatted query plan when exposing the query plan ([#1557](https://github.com/apollographql/router/issues/1557))
+### Numerous fixes to preview `@defer` query planning ([Issue #1698](https://github.com/apollographql/router/issues/1698))
 
-Move the location of the `text` field when exposing the query plan and fill it with a formatted query plan.
+Updated to [Federation `2.1.2-alpha.0`](https://github.com/apollographql/federation/pull/2132) which brings in a number of fixes for the preview `@defer` support.  These fixes include:
 
-By [@bnjjj](https://github.com/bnjjj) in https://github.com/apollographql/router/pull/1557
+ - [Empty selection set produced with @defer'd query `federation#2123`](https://github.com/apollographql/federation/issues/2123)
+ - [Include directive with operation argument errors out in Fed 2.1 `federation#2124`](https://github.com/apollographql/federation/issues/2124)
+ - [query plan sequencing affected with __typename in fragment `federation#2128`](https://github.com/apollographql/federation/issues/2128)
+ - [Router Returns Error if __typename Omitted `router#1668`](https://github.com/apollographql/router/issues/1668)
 
-### Fix typo on HTTP errors from subgraph ([#1593](https://github.com/apollographql/router/pull/1593))
-
-Remove the closed parenthesis at the end of error messages resulting from HTTP errors from subgraphs.
-
-By [@nmoutschen](https://github.com/nmoutschen) in https://github.com/apollographql/router/pull/1593
-
-### Only send one report for a response with deferred responses ([PR #1596](https://github.com/apollographql/router/issues/1596))
-
-deferred responses come as multipart elements, send as individual HTTP response chunks. When a client receives one chunk,
-it should contain the next delimiter, so the client knows that the response can be processed, instead of waiting for the
-next chunk to see the delimiter.
-
-By [@Geal](https://github.com/Geal) in https://github.com/apollographql/router/pull/1596
+By [@abernix](https://github.com/abernix) in https://github.com/apollographql/router/pull/1711
 
 ## 🛠 Maintenance
-
-### Depend on published `router-bridge` ([PR #1613](https://github.com/apollographql/router/issues/1613))
-
-We have published the `router-bridge` to crates.io, which removes the need for router developers to have nodejs installed.
-
-By [@o0Ignition0o](https://github.com/o0Ignition0o) in https://github.com/apollographql/router/pull/1613
-
-### Re-organize our release steps checklist ([PR #1605](https://github.com/apollographql/router/pull/1605))
-
-We've got a lot of manual steps we need to do in order to release the Router binarys, but we can at least organize them meaningfuly for ourselves to follow!  This is only a Router-team concern today!
-
-By [@abernix](https://github.com/abernix) in https://github.com/apollographql/router/pull/1605)
-
 ## 📚 Documentation

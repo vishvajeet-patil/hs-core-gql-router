@@ -50,7 +50,7 @@ pub struct QueryPlan {
     usage_reporting: UsageReporting,
     pub(crate) root: PlanNode,
     /// String representation of the query plan (not a json representation)
-    pub(crate) formatted_query_plan: String,
+    pub(crate) formatted_query_plan: Option<String>,
     options: QueryPlanOptions,
 }
 
@@ -69,7 +69,7 @@ impl QueryPlan {
                 referenced_fields_by_type: Default::default(),
             }),
             root: root.unwrap_or_else(|| PlanNode::Sequence { nodes: Vec::new() }),
-            formatted_query_plan: String::new(),
+            formatted_query_plan: Default::default(),
             options: QueryPlanOptions::default(),
         }
     }
@@ -267,7 +267,7 @@ impl QueryPlan {
         &self,
         context: &'a Context,
         service_factory: &'a Arc<SF>,
-        originating_request: &'a Arc<http::Request<Request>>,
+        supergraph_request: &'a Arc<http::Request<Request>>,
         schema: &'a Schema,
         sender: futures::channel::mpsc::Sender<Response>,
     ) -> Response
@@ -285,7 +285,7 @@ impl QueryPlan {
                     context,
                     service_factory,
                     schema,
-                    originating_request,
+                    supergraph_request,
                     deferred_fetches: &deferred_fetches,
                     options: &self.options,
                 },
@@ -312,7 +312,7 @@ pub(crate) struct ExecutionParameters<'a, SF> {
     context: &'a Context,
     service_factory: &'a Arc<SF>,
     schema: &'a Schema,
-    originating_request: &'a Arc<http::Request<Request>>,
+    supergraph_request: &'a Arc<http::Request<Request>>,
     deferred_fetches: &'a HashMap<String, Sender<(Value, Vec<Error>)>>,
     options: &'a QueryPlanOptions,
 }
@@ -464,7 +464,7 @@ impl PlanNode {
                         let label = deferred_node.label.clone();
                         let mut tx = sender.clone();
                         let sc = parameters.schema.clone();
-                        let orig = parameters.originating_request.clone();
+                        let orig = parameters.supergraph_request.clone();
                         let sf = parameters.service_factory.clone();
                         let ctx = parameters.context.clone();
                         let opt = parameters.options.clone();
@@ -500,7 +500,7 @@ impl PlanNode {
                                             context: &ctx,
                                             service_factory: &sf,
                                             schema: &sc,
-                                            originating_request: &orig,
+                                            supergraph_request: &orig,
                                             deferred_fetches: &deferred_fetches,
                                             options: &opt,
                                         },
@@ -582,7 +582,7 @@ impl PlanNode {
                                     context: parameters.context,
                                     service_factory: parameters.service_factory,
                                     schema: parameters.schema,
-                                    originating_request: parameters.originating_request,
+                                    supergraph_request: parameters.supergraph_request,
                                     deferred_fetches: &deferred_fetches,
                                     options: parameters.options,
                                 },
@@ -616,7 +616,7 @@ impl PlanNode {
                     errors = Vec::new();
 
                     if let Some(&Value::Bool(true)) = parameters
-                        .originating_request
+                        .supergraph_request
                         .body()
                         .variables
                         .get(condition.as_str())
@@ -928,7 +928,7 @@ pub(crate) mod fetch {
                 data,
                 current_dir,
                 // Needs the original request here
-                parameters.originating_request,
+                parameters.supergraph_request,
                 parameters.schema,
                 parameters.options.enable_deduplicate_variables,
             )
@@ -941,7 +941,7 @@ pub(crate) mod fetch {
             };
 
             let subgraph_request = SubgraphRequest::builder()
-                .originating_request(parameters.originating_request.clone())
+                .supergraph_request(parameters.supergraph_request.clone())
                 .subgraph_request(
                     http_ext::Request::builder()
                         .method(http::Method::POST)
@@ -1244,7 +1244,7 @@ mod tests {
     async fn mock_subgraph_service_withf_panics_should_be_reported_as_service_closed() {
         let query_plan: QueryPlan = QueryPlan {
             root: serde_json::from_str(test_query_plan!()).unwrap(),
-            formatted_query_plan: String::new(),
+            formatted_query_plan: Default::default(),
             options: QueryPlanOptions::default(),
             usage_reporting: UsageReporting {
                 stats_report_key: "this is a test report key".to_string(),
@@ -1294,7 +1294,7 @@ mod tests {
     async fn fetch_includes_operation_name() {
         let query_plan: QueryPlan = QueryPlan {
             root: serde_json::from_str(test_query_plan!()).unwrap(),
-            formatted_query_plan: String::new(),
+            formatted_query_plan: Default::default(),
             usage_reporting: UsageReporting {
                 stats_report_key: "this is a test report key".to_string(),
                 referenced_fields_by_type: Default::default(),
@@ -1348,7 +1348,7 @@ mod tests {
     async fn fetch_makes_post_requests() {
         let query_plan: QueryPlan = QueryPlan {
             root: serde_json::from_str(test_query_plan!()).unwrap(),
-            formatted_query_plan: String::new(),
+            formatted_query_plan: Default::default(),
             usage_reporting: UsageReporting {
                 stats_report_key: "this is a test report key".to_string(),
                 referenced_fields_by_type: Default::default(),
@@ -1405,7 +1405,7 @@ mod tests {
     async fn defer() {
         // plan for { t { x ... @defer { y } }}
         let query_plan: QueryPlan = QueryPlan {
-            formatted_query_plan: String::new(),
+            formatted_query_plan: Default::default(),
             root: PlanNode::Defer {
                 primary: Primary {
                     path: None,
@@ -1583,7 +1583,7 @@ mod tests {
             //     mutationB
             //   }
             // }
-            formatted_query_plan: String::new(),
+            formatted_query_plan: Default::default(),
             root: serde_json::from_str(
                 r#"{
                 "kind": "Sequence",
